@@ -38,6 +38,26 @@ max_concurrent_uploads=$(jq -r '.source.max_concurrent_uploads // 3' < $payload)
 export AWS_ACCESS_KEY_ID=$(jq -r '.source.aws_access_key_id // ""' < $payload)
 export AWS_SECRET_ACCESS_KEY=$(jq -r '.source.aws_secret_access_key // ""' < $payload)
 export AWS_SESSION_TOKEN=$(jq -r '.source.aws_session_token // ""' < $payload)
+export AWS_ROLE=$(jq -r '.source.aws_role // ""' < $payload)
+
+if [ ! -z "$AWS_ACCESS_KEY_ID" ] && [ ! -z "$AWS_SECRET_ACCESS_KEY" ] && [ ! -z "$AWS_ROLE" ] ; then
+  # should reassign aws credentials.
+  CREDS=$(aws sts assume-role --role-arn ${AWS_ROLE} --role-session-name "deploy")
+  if [ $? -ne 0 ]
+  then
+    echo "unable to assume role: $0" >&2
+    exit 1
+  fi
+
+  export AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r ".Credentials.AccessKeyId")
+  export AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r ".Credentials.SecretAccessKey")
+  export AWS_SESSION_TOKEN=$(echo $CREDS | jq -r ".Credentials.SessionToken")
+  if [ $? -ne 0 ]
+  then
+    echo "assign creds from assumed role: $0" >&2
+    exit 1
+  fi
+fi
 
 if private_registry "${repository}" ; then
   registry="$(extract_registry "${repository}")"
@@ -240,7 +260,7 @@ elif [ -n "$build" ]; then
       # see https://github.com/moby/moby/pull/32677
       # and https://github.com/awslabs/amazon-ecr-credential-helper/issues/9
       docker pull "${ecr_image}"
-    done    
+    done
   fi
 
   docker build -t "${repository}:${tag_name}" "${target[@]}" "${expanded_build_args[@]}" "${expanded_labels[@]}" -f "$dockerfile" $cache_from "$build"
